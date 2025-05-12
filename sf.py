@@ -1,4 +1,3 @@
-# --- SecureFile CLI Encryption/Decryption --- #
 # --- sf.py --- #
 """
 Secure File Encryption/Decryption Utility
