@@ -1,14 +1,14 @@
-#--- test_secure_file.py ---#
+# --- test_secure_file.py ---#
+import os
 import shutil
 import struct
-import unittest
 import tempfile
-import os
+import unittest
 from unittest.mock import patch
 
-from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from sf import SecureFile  # Adjust import path as needed
+from sf import SecureFile, NONCE_SIZE
 
 
 class TestSecureFile(unittest.TestCase):
@@ -70,23 +70,27 @@ class TestSecureFile(unittest.TestCase):
 
         # Decrypt to get plain_bytes and manually corrupt hash
         with open(self.output_path, 'rb') as f:
+            kdf_method = struct.unpack('B', f.read(1))[0]
             flags = struct.unpack('B', f.read(1))[0]
             salt_len = struct.unpack('>I', f.read(4))[0]
             salt = f.read(salt_len)
+            nonce = f.read(NONCE_SIZE)
             encrypted_data = f.read()
 
         key = sf._generate_key(bytearray(b'password'), salt)
-        fernet = Fernet(key)
-        plain_bytes = fernet.decrypt(encrypted_data)
+        aesgcm = AESGCM(key)
+        plain_bytes = aesgcm.decrypt(nonce, encrypted_data, associated_data=None)
 
         corrupted = plain_bytes[:-32] + b'\\x00' * 32  # Overwrite hash with zeros
 
         # Re-encrypt and overwrite the file with corrupted content
-        corrupted_encrypted = fernet.encrypt(corrupted)
+        corrupted_encrypted = aesgcm.encrypt(nonce, corrupted, associated_data=None)
         with open(self.output_path, 'wb') as f:
+            f.write(struct.pack('B', kdf_method))
             f.write(struct.pack('B', flags))
             f.write(struct.pack('>I', salt_len))
             f.write(salt)
+            f.write(nonce)
             f.write(corrupted_encrypted)
 
         sf = SecureFile(self.output_path, self.decrypted_path)

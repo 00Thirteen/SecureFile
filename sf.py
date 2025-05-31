@@ -6,7 +6,6 @@ This module provides functionality to encrypt and decrypt files with optional co
 and integrity verification using SHA-256. Password-based encryption is used with a high iteration PBKDF2 key derivation.
 """
 import argparse
-import base64
 import getpass
 import gzip
 import hashlib
@@ -15,7 +14,8 @@ import os
 import struct
 import logging
 
-from cryptography.fernet import Fernet
+from argon2.low_level import hash_secret_raw, Type
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -24,9 +24,15 @@ from hmac import compare_digest
 
 SALT_SIZE = 32
 ITERATIONS = 600000
+TIME_COST = 4
+MEMORY_COST = 65536
+PARALLELISM = 2
+HASH_LEN = 32           # 256-bit key
+NONCE_SIZE = 12         # 96-bit nonce recommended for AES-GCM
 MAX_PASSWORD_ATTEMPTS = 3
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(asctime)s %(message)s', datefmt='%Y/%m/%d %H:%M:%S')
+
 
 class SecureFile:
     """
@@ -35,13 +41,16 @@ class SecureFile:
     Attributes:
         input_file (str): Path to the input file.
         output_file (str): Path to the output file.
+        method (str): Key derivation function to use - Either 'argon2' or 'pbkdf2'
     """
-    def __init__(self, input_file: str, output_file: str):
+
+    def __init__(self, input_file: str, output_file: str, method: str = "argon2"):
         """
-        Initialize SecureFile with input and output file paths.
+        Initialize SecureFile with input/output file paths and the key derivation function to use.
         """
         self.input_file = input_file
         self.output_file = output_file
+        self._kdf_method = method
 
     @staticmethod
     def _generate_salt() -> bytes:
@@ -76,8 +85,7 @@ class SecureFile:
             attempts += 1
         raise ValueError(f"Failed to enter the correct password after {MAX_PASSWORD_ATTEMPTS} attempts.")
 
-    @staticmethod
-    def _generate_key(password: bytes, salt: bytes) -> bytes:
+    def _generate_key(self, password: bytes, salt: bytes) -> bytes:
         """
         Derive a cryptographic key from the password and salt.
 
@@ -88,21 +96,30 @@ class SecureFile:
         Returns:
             bytes: A base64-encoded key.
         """
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=ITERATIONS,
-            backend=default_backend()
-        )
-        return base64.urlsafe_b64encode(kdf.derive(password))
+        if self._kdf_method == "argon2":
+            return hash_secret_raw(
+                    secret=bytes(password),
+                    salt=salt,
+                    time_cost=TIME_COST,
+                    memory_cost=MEMORY_COST,
+                    parallelism=PARALLELISM,
+                    hash_len=HASH_LEN,
+                    type=Type.ID
+                )
+        elif self._kdf_method == "pbkdf2":
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=HASH_LEN,
+                salt=salt,
+                iterations=ITERATIONS,
+                backend=default_backend()
+            )
+            return kdf.derive(password)
+        else:
+            raise ValueError(f"Unsupported KDF method: {self._kdf_method}")
 
-    def encrypt(self,
-                delete: bool = False,
-                overwrite: bool = False,
-                compress: bool = False,
-                no_hash: bool = False
-                ) -> None:
+    def encrypt(self, compress: bool = False, delete: bool = False, no_hash: bool = False,
+                overwrite: bool = False) -> None:
         """
         Encrypt the input file and save it to the output file.
 
@@ -116,12 +133,14 @@ class SecureFile:
         salt_length = len(salt)
         password_bytes = self._get_password()
         key = self._generate_key(password_bytes, salt)
+
         for i in range(len(password_bytes)):
             password_bytes[i] = 0
         del password_bytes
 
-        fernet = Fernet(key)
+        aesgcm = AESGCM(key)
         del key
+        nonce = token_bytes(NONCE_SIZE)
 
         try:
             with open(self.input_file, 'rb') as f:
@@ -143,10 +162,26 @@ class SecureFile:
             plain_bytes += digest
             flags |= 0x01
 
-        encrypted_bytes = fernet.encrypt(plain_bytes)
-        logging.info("Encryption successful.")
+        encrypted_bytes = aesgcm.encrypt(nonce, plain_bytes, associated_data=None)
+        logging.info(f"Encryption successful using {"ARGON2ID" if self._kdf_method == 'argon2' else "PBKDF2HMAC"}.")
 
-        save_data = struct.pack('B', flags) + struct.pack('>I', salt_length) + salt + encrypted_bytes
+        # Set KDF _kdf_method flag
+        if self._kdf_method == "pbkdf2":
+            kdf_method_flag = 0x01
+        elif self._kdf_method == "argon2":
+            kdf_method_flag = 0x02
+        else:
+            raise ValueError(f"Unsupported key derivation method: {self._kdf_method}")
+
+        # Construct file format: [KDF method][flags][salt length][salt][nonce][encrypted data]
+        save_data = (
+                struct.pack('B', kdf_method_flag) +
+                struct.pack('B', flags) +
+                struct.pack('>I', salt_length) +
+                salt +
+                nonce +
+                encrypted_bytes
+        )
 
         if os.path.exists(self.output_file) and not overwrite:
             raise FileExistsError(
@@ -167,14 +202,27 @@ class SecureFile:
             delete (bool): If True, securely delete the encrypted file after decryption.
             overwrite (bool): If True, overwrite the output file if it exists.
         """
+        # noinspection SpellCheckingInspection
         try:
             with open(self.input_file, 'rb') as f:
+                kdf_method_byte = f.read(1)
+                if not kdf_method_byte:
+                    raise Exception("Missing kdf_method byte in file.")
+                kdf_method = struct.unpack('B', kdf_method_byte)[0]
+                if kdf_method == 0x01:
+                    self._kdf_method = "pbkdf2"
+                elif kdf_method == 0x02:
+                    self._kdf_method = "argon2"
+                else:
+                    raise ValueError(f"Unsupported key derivation method: {self._kdf_method}")
+
                 flags_byte = f.read(1)
                 if not flags_byte:
                     raise Exception("Missing flags byte in file.")
                 flags = struct.unpack('B', flags_byte)[0]
                 has_hash = flags & 0x01
                 has_compression = flags & 0x02
+
                 salt_length_bytes = f.read(4)
                 if not salt_length_bytes:
                     raise Exception("File is empty or incomplete.")
@@ -182,6 +230,7 @@ class SecureFile:
                 salt = f.read(salt_length)
                 if len(salt) != salt_length:
                     raise Exception("Could not read expected amount of salt.")
+                nonce = f.read(NONCE_SIZE)
                 encrypted_bytes = f.read()
         except FileNotFoundError as fnfe:
             logging.error(f"File not found: {fnfe}")
@@ -196,12 +245,12 @@ class SecureFile:
             password[i] = 0
         del password
 
-        fernet = Fernet(key)
+        aesgcm = AESGCM(key)
         del key
 
         try:
-            plain_bytes = fernet.decrypt(encrypted_bytes)
-            logging.info("Decryption successful.")
+            plain_bytes = aesgcm.decrypt(nonce, encrypted_bytes, associated_data=None)
+            logging.info(f"Decryption successful using {"ARGON2ID" if self._kdf_method == 'argon2' else "PBKDF2HMAC"}.")
         except Exception as e:
             raise Exception(f"Decryption error: {e}")
 
@@ -267,6 +316,7 @@ class SecureFile:
                     logging.warning(f"Unix/macOS secure delete failed: {e}")
             logging.warning("Secure delete fallback in use. File may not be securely removed.")
 
+
 def main() -> None:
     """
     Entry point for command-line interface.
@@ -278,20 +328,27 @@ def main() -> None:
     parser.add_argument("-o", "--output", required=True, help="File path to save encrypted or decrypted file to.")
 
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("-e", "--encrypt", action="store_true", help="Encrypt input to output.")
     group.add_argument("-d", "--decrypt", action="store_true", help="Decrypt input to output.")
+    group.add_argument("-e", "--encrypt", action="store_true", help="Encrypt input to output.")
 
-    parser.add_argument("-del", "--delete", action="store_true", help="Delete the input file after encryption/decryption.")
-    parser.add_argument("-ow", "--overwrite", action="store_true", help="Overwrite the output file if it already exists.")
     parser.add_argument("-c", "--compress", action="store_true", help="Enable GZIP compression before encryption.")
-    parser.add_argument("--no-hash", action="store_true", help="Disable hash verification.  A hash will not be created and saved during encryption.")
+    parser.add_argument("-del", "--delete", action="store_true",
+                        help="Delete the input file after encryption/decryption.")
+    parser.add_argument("--kdf", choices=["argon2", "pbkdf2"], default="argon2",
+                        help="Key derivation function to use (default: argon2)")
+    parser.add_argument("--no-hash", action="store_true",
+                        help="Disable hash verification.  A hash will not be created and saved during encryption.")
+    parser.add_argument("-ow", "--overwrite", action="store_true",
+                        help="Overwrite the output file if it already exists.")
+
     args = parser.parse_args()
-    sf = SecureFile(args.input, args.output)
+    sf = SecureFile(args.input, args.output, args.kdf)
 
     if args.encrypt:
-        sf.encrypt(delete=args.delete, overwrite=args.overwrite, compress=args.compress, no_hash=args.no_hash)
+        sf.encrypt(compress=args.compress, delete=args.delete, no_hash=args.no_hash, overwrite=args.overwrite)
     elif args.decrypt:
         sf.decrypt(delete=args.delete, overwrite=args.overwrite)
+
 
 if __name__ == "__main__":
     main()

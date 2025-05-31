@@ -1,118 +1,144 @@
+# 🔐 Secure File Encryption/Decryption Utility
 
-# Secure File Encryption/Decryption Utility
+**SecureFile** is a Python command-line utility for securely encrypting and decrypting files using **AES-GCM** encryption and strong, password-based key derivation with **Argon2id** or **PBKDF2**.
 
-This Python script provides functionality to securely encrypt and decrypt files with optional compression and integrity verification using SHA-256. The utility leverages password-based encryption with a high iteration PBKDF2 key derivation method to ensure robust security.
+---
 
-## Features
+## 🚀 Features
 
-- **Password-based encryption** using PBKDF2 with SHA-256
-- **Integrity verification** with SHA-256 hash during encryption/decryption
-- **Optional file compression** using GZIP
-- **Secure file deletion** after encryption or decryption
-- **Command-line interface** for ease of use
+- ✅ **AES-GCM encryption** (authenticated encryption with 256-bit keys)
+- 🔑 **Argon2id** (default) or **PBKDF2-HMAC-SHA256** key derivation
+- 🛡️ Optional **SHA-256 hash verification** to detect tampering
+- 📦 Optional **GZIP compression** before encryption
+- 🧹 **Secure deletion** of original files with cross-platform support
+- 🖥️ **CLI-based workflow** for flexible and scriptable use
+- 🔁 **Automatic decryption compatibility** with KDF detection
 
-## Requirements
+---
 
-To use the Secure File Encryption/Decryption Utility, you'll need:
-- Python 3.6 or higher
-- The following Python libraries:
-  - `cryptography` (install via `pip install cryptography`)
-  - `getpass` (usually pre-installed with Python)
-  - `gzip` (usually pre-installed with Python)
-  - `struct` (usually pre-installed with Python)
-  - `hmac` (usually pre-installed with Python)
+## 📋 Requirements
 
-## Installation
+- Python 3.6+
+- Dependencies:
+  ```bash
+  pip install cryptography argon2-cffi
+  ```
 
-1. Clone the repository or download the `sf.py` file.
-2. Install required dependencies:
-   ```bash
-   pip install cryptography
-   ```
+---
 
-## Usage
+## 🧑‍💻 Installation
 
-You can use the script via the command line to encrypt or decrypt files.
+1. Clone this repository or download `sf.py`.
+2. Install the required packages as shown above.
 
-### Encryption
+---
 
-To encrypt a file, run the following command:
+## 🔧 Usage
+
+Run from the terminal:
+
+### 🔐 Encrypt a File
 
 ```bash
 python sf.py --encrypt --input <input_file> --output <output_file> [options]
 ```
 
-#### Options:
-- `--delete`: Securely delete the input file after encryption.
-- `--overwrite`: Overwrite the output file if it already exists.
-- `--compress`: Compress the file using GZIP before encryption.
-- `--no-hash`: Disable hash verification (no SHA-256 hash will be saved during encryption).
+#### Encryption Options
+- `--kdf argon2|pbkdf2` → Choose key derivation function (default: `argon2`)
+- `--compress` → Compress input with GZIP before encryption
+- `--no-hash` → Disable hash verification
+- `--delete` → Securely delete input file after encryption
+- `--overwrite` → Overwrite output file if it already exists
 
-Example:
+✅ Example:
 
 ```bash
-python sf.py --encrypt --input example.txt --output example_encrypted.enc --compress --delete
+python sf.py --encrypt --input notes.txt --output notes.enc --compress --delete
 ```
 
-This will encrypt `example.txt`, compress it before encryption, and securely delete the original file after encryption.
+---
 
-### Decryption
-
-To decrypt a file, use the following command:
+### 🔓 Decrypt a File
 
 ```bash
 python sf.py --decrypt --input <input_file> --output <output_file> [options]
 ```
 
-#### Options:
-- `--delete`: Securely delete the encrypted file after decryption.
-- `--overwrite`: Overwrite the output file if it already exists.
+#### Decryption Options
+- `--delete` → Securely delete encrypted file after decryption
+- `--overwrite` → Overwrite the output file if it already exists
 
-Example:
+✅ Example:
 
 ```bash
-python sf.py --decrypt --input example_encrypted.enc --output example_decrypted.txt --delete
+python sf.py --decrypt --input notes.enc --output notes_restored.txt --delete
 ```
 
-This will decrypt `example_encrypted.enc`, saving the result to `example_decrypted.txt`, and securely delete the encrypted file after decryption.
+---
 
-### Password Prompts
+### 🔑 Password Input
 
-- During encryption, you will be asked to enter a password twice for confirmation.
-- During decryption, you will be asked to enter the password used during encryption.
-
-## Security
-
-- **Password**: The password you choose is used to derive a cryptographic key using PBKDF2 with SHA-256, iterated 600,000 times, to make brute-force attacks more difficult.
-- **Encryption**: The encryption algorithm used is AES with a 256-bit key, provided by the `cryptography` library's `Fernet` module.
-- **Hash Verification**: During encryption, a SHA-256 hash of the file content is computed and stored. During decryption, this hash is used to verify the integrity of the file. If the hash does not match, the file has been tampered with.
-- **File Deletion**: After encryption or decryption, you can choose to securely delete the input or encrypted file using methods designed for both Windows and UNIX-like systems.
-
-## Troubleshooting
-
-- If you encounter issues with file reading or writing, check that the paths to the input and output files are correct and that you have the necessary permissions.
-- Ensure that the encryption and decryption passwords match. If the passwords do not match, decryption will fail.
-- If you encounter any issues with compression or decompression, ensure that the file is correctly compressed and that it has not been corrupted.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- During encryption, you’ll enter your password **twice** for confirmation.
+- During decryption, you’ll enter the password used during encryption.
+- Passwords are **securely wiped from memory** after key derivation.
 
 ---
 
-## Script Overview
+## 🔐 Security Details
 
-The `sf.py` script is designed for secure file encryption and decryption. It utilizes the `cryptography` library to perform encryption with the `Fernet` symmetric encryption system, which is based on AES encryption. The script also includes features for file compression, hash verification, and secure file deletion.
-
-### Classes
-- **SecureFile**: This class handles file encryption and decryption, as well as password management, key generation, and file compression. It contains methods for encryption (`encrypt()`) and decryption (`decrypt()`), along with helper methods for secure password input and file handling.
-
-### Methods
-- `_generate_salt()`: Generates a random salt for key derivation.
-- `_get_password()`: Prompts the user to securely input a password for encryption or decryption.
-- `_generate_key()`: Generates a cryptographic key based on the user's password and salt.
-- `encrypt()`: Encrypts the input file and saves the encrypted file to the output location.
-- `decrypt()`: Decrypts the input file and saves the result to the output location.
-- `_secure_delete()`: Securely deletes a file from disk after encryption or decryption.
+| Area               | Implementation                                  |
+|--------------------|--------------------------------------------------|
+| **Encryption**      | AES-GCM (Galois/Counter Mode), 256-bit key       |
+| **KDFs Supported**  | Argon2id (default), PBKDF2-HMAC-SHA256           |
+| **Key Size**        | 256 bits (32 bytes)                              |
+| **Integrity**       | SHA-256 hash (optional) + built-in GCM tag       |
+| **Compression**     | Optional GZIP before encryption                  |
+| **Deletion**        | Secure file overwrite + removal on Windows/Unix |
+| **File Format**     | Custom binary format with embedded metadata      |
 
 ---
+
+### 📦 File Format Layout
+
+Each encrypted file includes the following header layout:
+
+```
+[1 byte]     → KDF method flag (0x01 = PBKDF2, 0x02 = Argon2)
+[1 byte]     → Feature flags (compression, hash, etc.)
+[4 bytes]    → Salt length (uint32)
+[salt]       → Random salt for KDF
+[12 bytes]   → Nonce used by AES-GCM
+[ciphertext] → Encrypted and authenticated file contents
+```
+
+---
+
+## 🧪 Troubleshooting
+
+- Ensure your input/output paths are valid.
+- Match encryption and decryption passwords exactly.
+- If hash verification fails, the file may have been tampered with.
+- If decryption fails, confirm the correct password and file format were used.
+
+---
+
+## 📜 License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+## 🧠 Script Architecture
+
+### 🔧 Class: `SecureFile`
+
+Handles all secure operations:
+
+| Method             | Description                                                |
+|--------------------|------------------------------------------------------------|
+| `_generate_salt()` | Generates a 256-bit salt                                    |
+| `_get_password()`  | Securely prompts user for password                         |
+| `_generate_key()`  | Uses Argon2id or PBKDF2 to derive encryption key           |
+| `encrypt()`        | Encrypts file using AES-GCM with optional compression/hash |
+| `decrypt()`        | Decrypts file and verifies integrity if enabled            |
+| `_secure_delete()` | Securely deletes files via overwrite/removal               |
